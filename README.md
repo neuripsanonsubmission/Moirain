@@ -23,6 +23,9 @@ We recommend installing our code as a package. To do this, run the following.
 pip install -e .
 ```
 
+## Weights
+
+You can upload weights from HuggingFace for [Moirain-Base](https://huggingface.co/buckets/Moirain/moirain_base), [Moirain-Multi](https://huggingface.co/buckets/Moirain/moirain_multi), and [Moirain-DPO](https://huggingface.co/buckets/Moirain/moirain_dpo) (TOFU SFT versions).
 
 ## Inference
 
