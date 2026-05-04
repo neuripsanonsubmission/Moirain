@@ -1,0 +1,65 @@
+defaults:
+  - _self_
+
+data:
+  # CSV for path and metadata to training examples.
+  csv_path_train: 
+  data_path_train:
+  csv_path_val:
+  data_path_val: 
+  data_format: csv
+  max_len:
+  task:
+  size:
+  sample_mode: normal
+  sample_num: 
+  tokenizer_path: ./data/tokenizer.json
+
+model:
+  use_peft: true
+  peft_rank: 16
+  peft_alpha: ${model.peft_rank}
+  
+
+
+
+experiment:
+  # Experiment metadata
+  name:
+  run_id: null
+  num_parameters: null
+
+  # Training mode
+  use_ddp : True
+  use_gpu: True
+  num_loader_workers: 1
+  prefetch_factor: 10
+  use_amp: True
+
+  # Training arguments
+  log_freq: 500
+  ckpt_freq:
+  batch_size: 16
+  num_epoch: 5
+  num_steps:
+  validate: True
+
+  # Scheduler
+  learning_rate: 5.0e-05
+  schedule_type: cosin_decay
+  warmup_steps: 5000
+  cooldown_steps:
+  gamma:
+  min_lr_scale:
+  period: 200000
+  
+  # Checkpoint directory to warm start from.
+  resume_from_ckpt:
+  use_ckpt_conf: True
+  warm_start: ./ckpt/moirain_multi/step_21174_merged.pth
+  ckpt_dir: ./ckpt/
+  freeze: False
+
+hydra:
+  run:
+    dir: ./outputs/${experiment.name}/${now:%dD_%mM_%YY_%Hh_%Mm_%Ss}

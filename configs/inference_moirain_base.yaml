@@ -1,0 +1,34 @@
+defaults:
+  - _self_
+
+inference:
+  name: moirain_base
+  seed: 123
+  nof_samples: 10000
+
+  use_ddp: False
+
+  sample_mode: topp
+  kp: 1.0
+  temperature: 1.0
+  max_len: 512
+  num_loader_workers: 1
+
+  output_dir: ./inference_outputs/
+  model_path: ./ckpt/moirain_base/step_259617.pth
+
+data:
+  csv_path_test: 
+  data_path_test: 
+  data_format: base
+  max_len:
+  task:
+  size: ${inference.nof_samples}
+  sample_mode: normal
+  sample_num:
+  tokenizer_path: ./data/tokenizer.json
+  
+
+hydra:
+  run:
+    dir: ./outputs/inference/${now:%dD_%mM_%YY_%Hh_%Mm_%Ss}

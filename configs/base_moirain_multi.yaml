@@ -1,0 +1,92 @@
+defaults:
+  - _self_
+
+data:
+  # CSV for path and metadata to training examples.
+  csv_path_train: 
+  data_path_train: 
+  csv_path_val: 
+  data_path_val:
+  data_format: csv
+  max_len:
+  task:
+  size:
+  sample_mode: normal
+  sample_num: 
+  tokenizer_path: ./data/tokenizer.json
+
+
+model:
+  use_peft: true
+  peft_rank: 32
+  peft_alpha: ${model.peft_rank}
+  na:
+    c_s: 1024
+    c_hidden: 64
+    no_heads: 16
+    transition_n: 4
+    c_lm_head: 257
+    num_blocks_na: 24
+    norm_qk: true
+  aa:
+    c_s: 128
+    geom_no_heads: 12
+    no_qk_points: 4
+    no_v_points: 8
+    c_hidden: 64
+    no_heads: 12
+    transition_n: 2
+    num_blocks_aa: 10
+    norm_qk: true
+  cross:
+    c_s1: ${model.na.c_s}
+    c_s2: ${model.aa.c_s}
+    c_hidden: 64
+    no_heads: 16
+    transition_n: 4
+    num_blocks: 4
+    norm_qk: true
+
+
+
+experiment:
+  # Experiment metadata
+  name:
+  run_id: null
+  num_parameters: null
+
+  # Training mode
+  use_ddp : True
+  use_gpu: True
+  num_loader_workers: 1
+  prefetch_factor: 10
+  use_amp: true
+
+  # Training arguments
+  loss_type: tofu
+  log_freq: 500
+  ckpt_freq:
+  batch_size: 32
+  num_epoch: 5
+  num_steps:
+  validate: True
+
+  # Scheduler
+  learning_rate: 0.0001
+  schedule_type: cosin_decay
+  warmup_steps: 1000
+  cooldown_steps:
+  gamma:
+  min_lr_scale:
+  period: 200000
+  
+  # Checkpoint directory to warm start from.
+  resume_from_ckpt:
+  use_ckpt_conf: False
+  warm_start: ./ckpt/moirain_base/step_259617.pth
+  ckpt_dir: ./ckpt/
+  freeze: False
+
+hydra:
+  run:
+    dir: ./outputs/${experiment.name}/${now:%dD_%mM_%YY_%Hh_%Mm_%Ss}
