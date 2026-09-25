@@ -25,12 +25,12 @@ pip install -e .
 
 ## Weights
 
-You can upload weights from HuggingFace for [Moirain-Base](https://huggingface.co/buckets/Moirain/moirain_base), [Moirain-Multi](https://huggingface.co/buckets/Moirain/moirain_multi), and [Moirain-DPO](https://huggingface.co/buckets/Moirain/moirain_dpo) (TOFU SFT versions).
+You can upload weights from HuggingFace for [Moirain](https://huggingface.co/buckets/Moirain/moirain) and its pretrain version [Moirain-Base](https://huggingface.co/buckets/Moirain/moirain_base).
 
 ## Inference
 
-To run Moirain-Multi or Moirain-DPO inference for protein of your choice use the following command:
+To run Moirain inference for protein of your choice use the following command:
 ```bash
-python experiments/inference_moirain_dpo_from_cif.py --data.cif_path /path/to/your/name.cif
+python experiments/inference_moirain_from_cif.py --data.cif_path /path/to/your/name.cif
 ```
 Please make sure that protein structure follows AlphaFold format. The command will generate 1000 RNA sequences and save them in the ```./inference_outputs/name``` folder. There will be two files: ```seq_na.fasta```, containing final RNA sequences, and ```seq_na_uncut.fasta```, containing corresponding tokens.
