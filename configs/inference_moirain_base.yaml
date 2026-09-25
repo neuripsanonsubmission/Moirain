@@ -15,7 +15,7 @@ inference:
   num_loader_workers: 1
 
   output_dir: ./inference_outputs/
-  model_path: ./ckpt/moirain/step_51816.pth
+  model_path: ./ckpt/moirain_base/step_51816.pth
 
 data:
   csv_path_test: 
