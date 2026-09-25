@@ -2,28 +2,28 @@ defaults:
   - _self_
 
 inference:
-  name: moirain_base
+  name: moirain
   seed: 123
-  nof_samples: 10000
+  nof_samples: 1000
 
   use_ddp: False
 
   sample_mode: topp
-  kp: 1.0
   temperature: 1.0
-  max_len: 512
+  kp: 0.9
+  max_len: 50
   num_loader_workers: 1
 
   output_dir: ./inference_outputs/
-  model_path: ./ckpt/moirain/step_51816.pth
+  model_path: ./ckpt/moirain_dpo/step_47876.pth
 
 data:
   csv_path_test: 
   data_path_test: 
-  data_format: base
+  data_format: csv
   max_len:
   task:
-  size: ${inference.nof_samples}
+  size:
   sample_mode: normal
   sample_num:
   tokenizer_path: ./data/tokenizer.json

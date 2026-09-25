@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 import math
 from models.primitives import Linear, RMSNorm
-from data.rigid_utils import Rigid
-from models.pos_embedder import RotaryEmbedding, OneHotEmbedding
+from models.pos_embedder import RotaryEmbedding
 
 
 
@@ -24,16 +23,10 @@ def ipa_point_weights_init_(weights):
 
 
 class GeometricAttention(nn.Module):
-    def __init__(
-        self,
-        conf,
-        inf: float = 1e5,
-        eps: float = 1e-8,
-    ):
-        
+    def __init__(self, conf, inf = 1e5, eps = 1e-8):
         super().__init__()
-        self._conf = conf
 
+        self._conf = conf
         self.c_s = conf.c_s
         self.no_heads = conf.geom_no_heads
         self.no_qk_points = conf.no_qk_points
@@ -51,22 +44,13 @@ class GeometricAttention(nn.Module):
         ipa_point_weights_init_(self.head_weights)
 
         concat_out_dim = self.no_v_points * 4
-
         self.linear_out = Linear(self.no_heads * concat_out_dim, self.c_s)
 
         self.softmax = nn.Softmax(dim=-1)
         self.softplus = nn.Softplus()
 
 
-    def forward(
-        self,
-        s1: torch.Tensor,
-        s2: torch.Tensor,
-        r1: Rigid,
-        r2: Rigid,
-        mask1 = None,
-        mask2 = None
-    ) -> torch.Tensor:
+    def forward(self, s1, s2, r1, r2, mask1 = None, mask2 = None):
         
         # [*, N_res, H * P_q * 3]
         q_pts = self.linear_q_points(s1)
@@ -141,187 +125,75 @@ class GeometricAttention(nn.Module):
         
         return s1
 
-class Attention(nn.Module):
-    def __init__(
-        self,
-        conf,
-        inf: float = 1e5,
-        eps: float = 1e-8,
-    ):
-        
-        super().__init__()
-        self._conf = conf
 
+class Attention(nn.Module):
+    def __init__(self, conf):
+        super().__init__()
+
+        self._conf = conf
         self.c_s = conf.c_s
         self.c_hidden = conf.c_hidden
         self.no_heads = conf.no_heads
-        self.inf = inf
-        self.eps = eps
         self.norm_qk = conf.norm_qk
         
         hc = self.c_hidden * self.no_heads
+
         self.linear_q = Linear(self.c_s, hc, bias=False)
         self.linear_kv = Linear(self.c_s, 2 * hc, bias=False)
-
         self.linear_out = Linear(self.no_heads * self.c_hidden, self.c_s)
 
         if self.norm_qk:
             self.norm_q = RMSNorm(self.c_hidden)
             self.norm_k = RMSNorm(self.c_hidden)
 
-        self.softmax = nn.Softmax(dim=-1)
-
-
-    def forward(self, s1, s2, mask1, mask2):
-        
-        # [*, N_res, H * C_hidden]
-        q = self.linear_q(s1)
-        kv = self.linear_kv(s2)
-
-        # [*, N_res, H, C_hidden]
-        q = q.view(q.shape[:-1] + (self.no_heads, -1))
-
-        if self.norm_qk: 
-            q = self.norm_q(q)
-
-        # [*, N_res, H, 2 * C_hidden]
-        kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
-
-        # [*, N_res, H, C_hidden]
-        k, v = torch.split(kv, self.c_hidden, dim=-1)
-
-        if self.norm_qk: 
-            k = self.norm_k(k)
-
-        # [*, H, N_res, N_res]
-        a = torch.matmul(permute_final_dims(q, (1, 0, 2)), permute_final_dims(k, (1, 2, 0)))
-        a *= math.sqrt(1.0 / (3.0 * self.c_hidden))
-
-        square_mask = mask1.unsqueeze(-1) * mask2.unsqueeze(-2)
-        square_mask = self.inf * (square_mask - 1)
-        a = a + square_mask.unsqueeze(-3)
-
-        a = self.softmax(a)
-
-        # [*, N_res, H, C_hidden]
-        o = torch.matmul(a, v.transpose(-2, -3).to(dtype=a.dtype)).transpose(-2, -3)
-
-        # [*, N_res, H * C_hidden]
-        o = flatten_final_dims(o, 2)
-
-        # [*, N_res, C_s]
-        s1 = self.linear_out(o)
-        
-        return s1
 
 class SelfAttention(Attention):
-    def __init__(
-        self,
-        conf,
-        inf: float = 1e5,
-        eps: float = 1e-8,
-    ):
-        super().__init__(conf, inf, eps)
+    def __init__(self, conf):
+        super().__init__(conf)
         
         self.rotary_emb = RotaryEmbedding(dim = self.c_hidden)
 
 
     def forward(self, s, rpos, mask):
-        
+
         # [*, N_res, H * C_hidden]
         q = self.linear_q(s)
         kv = self.linear_kv(s)
 
         # [*, N_res, H, C_hidden]
         q = q.view(q.shape[:-1] + (self.no_heads, -1))
-        if self.norm_qk:
+
+        # [*, N_res, H, 2 * C_hidden]
+        kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
+
+        # [*, N_res, H, C_hidden]
+        k, v = torch.split(kv, self.c_hidden, dim=-1)
+
+        if self.norm_qk: 
             q = self.norm_q(q)
+            k = self.norm_k(k)
 
         q = self.rotary_emb.rotate_queries_or_keys(q, rpos)
-        
-        # [*, N_res, H, 2 * C_hidden]
-        kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
-
-        # [*, N_res, H, C_hidden]
-        k, v = torch.split(kv, self.c_hidden, dim=-1)
-        if self.norm_qk:
-            k = self.norm_k(k)
-
         k = self.rotary_emb.rotate_queries_or_keys(k, rpos)
 
-        square_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)
-        square_mask = self.inf * (square_mask - 1)
-
-        # [*, H, N_res, N_res]
-        a = torch.matmul(permute_final_dims(q, (1, 0, 2)), permute_final_dims(k, (1, 2, 0)))
-        a *= math.sqrt(1.0 / (3.0 * self.c_hidden))
-        a = a + square_mask.unsqueeze(-3)
-
-        a = self.softmax(a)
-
-        # [*, N_res, H, C_hidden]
-        o = torch.matmul(a, v.transpose(-2, -3).to(dtype=a.dtype)).transpose(-2, -3)
+        attn_mask = (mask.unsqueeze(-1)*mask.unsqueeze(-2)).bool().unsqueeze(1)
+        
+        o = nn.functional.scaled_dot_product_attention(q.transpose(-2, -3), k.transpose(-2, -3), v.transpose(-2, -3), attn_mask=attn_mask, dropout_p=0.0)
 
         # [*, N_res, H * C_hidden]
-        o = flatten_final_dims(o, 2)
+        o = flatten_final_dims(o.transpose(-2, -3), 2)
 
         # [*, N_res, C_s]
-        s = self.linear_out(o)
+        s1 = self.linear_out(o)
         
-        return s
-
-
-class GPTAttention(SelfAttention):
-
-    def forward(self, s, ridx, mask):
-        
-        # [*, N_res, H * C_hidden]
-        q = self.linear_q(s)
-        kv = self.linear_kv(s)
-
-        # [*, N_res, H, C_hidden]
-        q = q.view(q.shape[:-1] + (self.no_heads, -1))
-        if self.norm_qk:
-            q = self.norm_q(q)
-
-        q = self.rotary_emb.rotate_queries_or_keys(q, ridx)
-        
-        # [*, N_res, H, 2 * C_hidden]
-        kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
-
-        # [*, N_res, H, C_hidden]
-        k, v = torch.split(kv, self.c_hidden, dim=-1)
-        if self.norm_qk:
-            k = self.norm_k(k)
-
-        k = self.rotary_emb.rotate_queries_or_keys(k, ridx)
-
-        square_mask = mask.unsqueeze(-1) * mask.unsqueeze(-2)
-        n = mask.shape[-1]
-        square_mask *= torch.tril(torch.ones(n, n, dtype=torch.bool, device=mask.device))
-
-        square_mask = self.inf * (square_mask - 1)
-
-        # [*, H, N_res, N_res]
-        a = torch.matmul(permute_final_dims(q, (1, 0, 2)), permute_final_dims(k, (1, 2, 0)))
-        a *= math.sqrt(1.0 / (3 * self.c_hidden))
-        a = a + square_mask.unsqueeze(-3)
-
-        a = self.softmax(a)
-
-        # [*, N_res, H, C_hidden]
-        o = torch.matmul(a, v.transpose(-2, -3).to(dtype=a.dtype)).transpose(-2, -3)
-
-        # [*, N_res, H * C_hidden]
-        o = flatten_final_dims(o, 2)
-
-        # [*, N_res, C_s]
-        s = self.linear_out(o)
-        
-        return s
+        return s1
     
 
-class GPTAttentionFast(SelfAttention):
+class GPTAttention(Attention):
+    def __init__(self, conf):
+        super().__init__(conf)
+        
+        self.rotary_emb = RotaryEmbedding(dim = self.c_hidden)
 
     def forward(self, s, ridx):
         
@@ -357,95 +229,26 @@ class GPTAttentionFast(SelfAttention):
         return s
     
 
-
-class CrossAttention(Attention):
-    def __init__(
-        self,
-        conf,
-        inf: float = 1e5,
-        eps: float = 1e-8,
-    ):
-        super().__init__(conf, inf, eps)
-
-        self.pos_embed_1 = OneHotEmbedding(dim = self.c_s)
-
-
-    def forward(self, s1, s2, rpos1, mask1, mask2):
-        
-        s1 = s1 + self.pos_embed_1.embed_pos(rpos1)
-
-        # [*, N_res, H * C_hidden]
-        q = self.linear_q(s1)
-        kv = self.linear_kv(s2)
-
-        # [*, N_res, H, C_hidden]
-        q = q.view(q.shape[:-1] + (self.no_heads, -1))
-
-        if self.norm_qk: 
-            q = self.norm_q(q)
-
-        # [*, N_res, H, 2 * C_hidden]
-        kv = kv.view(kv.shape[:-1] + (self.no_heads, -1))
-
-        # [*, N_res, H, C_hidden]
-        k, v = torch.split(kv, self.c_hidden, dim=-1)
-
-        if self.norm_qk: 
-            k = self.norm_k(k)
-        
-        # [*, H, N_res, N_res]
-        a = torch.matmul(permute_final_dims(q, (1, 0, 2)), permute_final_dims(k, (1, 2, 0)))
-        a *= math.sqrt(1.0 / (3.0 * self.c_hidden))
-
-        square_mask = mask1.unsqueeze(-1) * mask2.unsqueeze(-2)
-        square_mask = self.inf * (square_mask - 1)
-        a = a + square_mask.unsqueeze(-3)
-        
-        a = self.softmax(a)
-
-        # [*, N_res, H, C_hidden]
-        o = torch.matmul(a, v.transpose(-2, -3).to(dtype=a.dtype)).transpose(-2, -3)
-
-        # [*, N_res, H * C_hidden]
-        o = flatten_final_dims(o, 2)
-
-        # [*, N_res, C_s]
-        s1 = self.linear_out(o)
-        
-        return s1
-    
-
-class CrossAttentionFast(nn.Module):
-    def __init__(
-        self,
-        conf,
-        inf: float = 1e5,
-        eps: float = 1e-8,
-    ):
-        
+class CrossAttention(nn.Module):
+    def __init__(self, conf):
         super().__init__()
-        self.conf = conf
 
+        self.conf = conf
         self.c_s1 = self.conf.c_s1
         self.c_s2 = self.conf.c_s2
         self.c_hidden = self.conf.c_hidden
         self.no_heads = self.conf.no_heads
-        self.inf = inf
-        self.eps = eps
         self.norm_qk = self.conf.norm_qk
         
         hc = self.c_hidden * self.no_heads
         self.linear_q = Linear(self.c_s1, hc, bias=False)
         self.linear_kv = Linear(self.c_s2, 2 * hc, bias=False)
-
         self.linear_out = Linear(self.no_heads * self.c_hidden, self.c_s1)
 
         if self.norm_qk:
             self.norm_q = RMSNorm(self.c_hidden)
             self.norm_k = RMSNorm(self.c_hidden)
-
-        self.softmax = nn.Softmax(dim=-1)
-        self.softplus = nn.Softplus()
+        
 
     def forward(self, s1, s2, mask1, mask2):
 

@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from models.primitives import Embedding, RMSNorm, Linear
-from models.attention import GPTAttentionFast
+from models.attention import GPTAttention
 
 
 
@@ -40,7 +40,7 @@ class EncoderNA(nn.Module):
         self.c_s = model_conf.c_s
         self.n = model_conf.transition_n
 
-        self.self_mha = GPTAttentionFast(model_conf)
+        self.self_mha = GPTAttention(model_conf)
 
         self.feed_forward = nn.Sequential(
             Linear(self.c_s, self.n * self.c_s, init='relu'),
@@ -81,7 +81,7 @@ class MainModel(nn.Module):
         for b in range(self.model_conf.num_blocks_na):
             self.trunk[f'encoder_na_{b}'] = EncoderNA(self.model_conf)
 
-        self.log_head_type = nn.Linear(self.model_conf.c_s, self.model_conf.c_lm_head)
+        self.log_head_type = Linear(self.model_conf.c_s, self.model_conf.c_lm_head, bias=False)
 
         
     def forward(self, batch):

@@ -3,33 +3,24 @@ defaults:
 
 data:
   # CSV for path and metadata to training examples.
-  csv_path_train:
+  csv_path_train: 
   data_path_train:
   csv_path_val:
-  data_path_val:
-  data_format: h5
-  max_len: 2048
+  data_path_val: 
+  data_format: csv
+  max_len:
   task:
   size:
   sample_mode: normal
   sample_num: 
   tokenizer_path: ./data/tokenizer.json
 
-
 model:
-  use_peft: False
-  peft_rank:
-  peft_alpha:
-  c_s: 1024
-  c_hidden: 64
-  no_heads: 16
-  transition_n: 4
-  c_lm_head: 257
-  num_blocks_na: 24
-  norm_qk: True
+  use_peft: true
+  peft_rank: 16
+  peft_alpha: ${model.peft_rank}
+  
 
-
-    
 
 
 experiment:
@@ -45,32 +36,34 @@ experiment:
   prefetch_factor: 10
   use_amp: True
 
-  # Training
-  loss_type:
-  batch_size: 128
+  # Training arguments
+  loss_type: dpo
+  beta: 0.1
+  tau: 1.0
+  batch_size: 16
   accumulation_steps: 1
-  num_epoch: 1
+  num_epoch: 5
   num_steps:
   validate: True
 
-  # Optimization
+  # Scheduler
   learning_rate: 0.0001
-  weight_decay: 0.0
+  weight_decay:
   schedule_type: cosin_decay
-  warmup_steps: 5000
+  warmup_steps: 1000
   cooldown_steps:
   gamma:
   min_lr_scale:
-  period: 51816
+  period: 200000
   max_gradient_norm: 1.0
 
   # Logging
   log_freq: 1000
-  ckpt_freq: 10000
+  ckpt_freq:
   
   # Checkpoint directory to warm start from.
   resume_from_ckpt:
-  use_ckpt_conf: False
+  use_ckpt_conf: True
   warm_start:
   ckpt_dir: ./ckpt/
   freeze: False

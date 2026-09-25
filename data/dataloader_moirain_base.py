@@ -14,11 +14,8 @@ class Dataset(dataloader.Dataset):
         tpos_na = np.arange(0, len(ttype_na))
 
         if len(ttype_na) > self.max_len+2:
-
-            crop_center = np.random.choice(range(self.max_len//2, len(ttype_na)-self.max_len//2))
-            tpos_na = tpos_na[crop_center-self.max_len//2:crop_center+self.max_len//2]
-            ttype_na = ttype_na[crop_center-self.max_len//2:crop_center+self.max_len//2]
-
+            tpos_na = tpos_na[:self.max_len+1]
+            ttype_na = ttype_na[:self.max_len+1]
 
         final_feats = {
             'ttype_na': torch.tensor(ttype_na).to(torch.int),

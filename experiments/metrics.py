@@ -1,6 +1,8 @@
 from collections import defaultdict
+import time
 import torch
 import torch.distributed as dist
+
 
 
 
@@ -8,15 +10,25 @@ class MetricTracker:
     def __init__(self, use_ddp=False):
         self.values = defaultdict(list)
         self.use_ddp = use_ddp
+        self.steps = 0
+        self.time = time.time()
 
     def update(self, dict):
         for k,v in dict.items():
             self.values[k].append(v)
 
-    def clear(self):
+    def step(self):
+        self.steps += 1
+
+    def reset(self):
+        self.steps = 0
+        self.time = time.time()
         self.values.clear()
 
     def get_log(self, eps = 1e-8):
+
+        elapsed_time = time.time() - self.time
+        step_per_sec = self.steps / elapsed_time
 
         rolling_values = {}
 
@@ -66,7 +78,7 @@ class MetricTracker:
         if all(v is not None for v in [tp, fp, fn]):
             output_dict["f1"] = (2 * tp) / (2 * tp + fp + fn + eps)
                     
-        metric_log = ' '.join([f'{k}={v:.4f}' for k,v in output_dict.items()])
+        metric_log = ' '.join([f'{k}={v:.4f}' for k,v in output_dict.items()]) + f', steps/sec={step_per_sec:.5f}'
 
         output_dict.clear()
         del output_dict

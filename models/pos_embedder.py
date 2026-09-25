@@ -20,7 +20,7 @@ class RotaryEmbedding(Module):
     def __init__(
         self,
         dim,
-        theta = 1000,
+        theta = 10000,
     ):
         super().__init__()
 
@@ -30,16 +30,15 @@ class RotaryEmbedding(Module):
 
     def rotate_queries_or_keys(self, x, seq_pos):
 
-        freqs = self.freqs
-
-        freqs = einsum('..., f -> ... f', seq_pos.type(freqs.dtype), freqs)
+        freqs = einsum('..., f -> ... f', seq_pos.float(), self.freqs.float())
 
         freqs = repeat(freqs, '... n -> ... (n r)', r = 2)
         
         freqs = freqs.unsqueeze(-2)
 
-        return (x * freqs.cos()) + (rotate_half(x) * freqs.sin())
+        out = (x.float() * freqs.cos()) + (rotate_half(x.float()) * freqs.sin())
 
+        return out.type_as(x)
 
 
 class SinusoidalEmbedding(Module):

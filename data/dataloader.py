@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import pandas as pd
+import foldcomp
 import gemmi
 import h5py
 
@@ -35,6 +36,10 @@ class Dataset(torch.utils.data.Dataset):
             self.csv = pd.read_csv(csv_path)
             self.data_path = data_path
 
+        elif self.data_format == 'foldcomp':
+            self.csv = pd.read_csv(csv_path)
+            self.data = foldcomp.open(data_path, ids=self.csv.id.tolist())
+
         elif self.data_format == 'h5':
             file = h5py.File(data_path, "r")
             self.data = file["sequences"]
@@ -59,6 +64,13 @@ class Dataset(torch.utils.data.Dataset):
             id = csv_row['id']
             feats = self.produce_sample(csv_row)
             return feats, id
+        
+        elif self.data_format == 'foldcomp':
+
+            name, pdb = self.data[example_idx]
+            feats_aa = gemmi.read_pdb_string(pdb)[0]['A']
+            feats = self.produce_sample(feats_aa)
+            return feats, name
 
         elif self.data_format == 'h5':
 
@@ -274,7 +286,3 @@ class DataLoader(torch.utils.data.DataLoader):
 
     def cat_features(self, batch):
         raise NotImplementedError("Subclasses must implement collate_fn")
-
-
-
- 

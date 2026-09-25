@@ -4,7 +4,7 @@ import torch
 import peft
 
 from data import tokenizers
-from models import model_moirain_multi
+from models import model_moirain
 from experiments.utils import write_pkl
 
 
@@ -56,7 +56,7 @@ def main():
     tokenizer = tokenizers.TokenizerRLMFlamingo(tokenizer_path)
 
     print("[3/5] Instantiating model …")
-    model = model_moirain_multi.MainModel(conf.model, tokenizer)
+    model = model_moirain.MainModel(conf.model, tokenizer)
 
     target_modules = [
         s

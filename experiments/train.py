@@ -1,6 +1,6 @@
 import os
 import torch
-import time
+import psutil
 from functools import wraps
 
 import logging
@@ -34,11 +34,9 @@ class ExperimentTrain:
 
         if self.use_ddp :
             torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-            dist.init_process_group(backend='nccl')
+            dist.init_process_group(backend='nccl', device_id=torch.cuda.current_device())
             self.ddp_info = eu.get_ddp_info()
             self.rank_log(f"GPU {self.ddp_info['local_rank']} is connected", all=True)
-            if self.ddp_info['rank'] not in [0,-1]:
-                self.exp_conf.ckpt_dir = None
             self.num_replicas = self.ddp_info['world_size']
             self.rank = self.ddp_info['rank']
         else:
@@ -224,6 +222,9 @@ class ExperimentTrain:
             )
 
             self.rank_log(f'Serialized experiment state to {ckpt_path}')
+
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
   
 
     def create_dataloaders(self):
@@ -237,19 +238,24 @@ class ExperimentTrain:
         train_sampler = self.data_loader.Sampler(self.data_conf, train_dataset, self.num_replicas, self.rank)
         valid_sampler = self.data_loader.Sampler(self.data_conf, valid_dataset, self.num_replicas, self.rank) if self.exp_conf.validate else None
 
+        batch_size = self.exp_conf.batch_size // self.exp_conf.accumulation_steps
+
+        if self.use_ddp:
+            batch_size //= self.num_replicas
+
         # Loaders
         train_loader = self.data_loader.DataLoader(
             train_dataset,
             self.tokenizer,
             sampler=train_sampler,
-            batch_size=self.exp_conf.batch_size if not self.use_ddp else self.exp_conf.batch_size // self.num_replicas,
+            batch_size=batch_size,
             num_workers=self.exp_conf.num_loader_workers,
         )
         valid_loader = self.data_loader.DataLoader(
             valid_dataset,
             self.tokenizer,
             sampler=valid_sampler,
-            batch_size=self.exp_conf.batch_size if not self.use_ddp else self.exp_conf.batch_size // self.num_replicas,
+            batch_size=batch_size,
             num_workers=self.exp_conf.num_loader_workers,
         ) if self.exp_conf.validate else None
 
@@ -269,19 +275,18 @@ class ExperimentTrain:
         if self.exp_conf.resume_from_ckpt:
             train_sampler.set_start(self.trained_steps*(self.exp_conf.batch_size if not self.use_ddp else self.exp_conf.batch_size // self.num_replicas))
 
-        if self.exp_conf.num_steps:
-            train_sampler.set_end(self.exp_conf.num_steps*(self.exp_conf.batch_size if not self.use_ddp else self.exp_conf.batch_size // self.num_replicas))
+        start_epoch = self.trained_epochs
 
-        for epoch in range(self.trained_epochs, self.exp_conf.num_epoch):
+        for epoch in range(start_epoch, self.exp_conf.num_epoch):
 
             train_sampler.set_epoch(epoch)
             if valid_sampler is not None: valid_sampler.set_epoch(epoch)
 
             self.train_epoch(train_loader)
 
-            self.trained_epochs = epoch
+            self.trained_epochs += 1
 
-            self.rank_log(f'End of training for epoch {self.trained_epochs+1}!')
+            self.rank_log(f'End of training for epoch {self.trained_epochs}!')
 
             if valid_loader is not None: self.validate_epoch(valid_loader)
 
@@ -289,44 +294,91 @@ class ExperimentTrain:
                 self.take_ckpt()
 
         self.rank_log('Done')
+
+
+    def get_batch_samples(self, data_iterator, num_batches):
+
+        batch_samples = [next(data_iterator) for _ in range(num_batches)]
+        num_items_in_batch = self.get_num_items_in_batch(batch_samples)
+
+        return batch_samples, num_items_in_batch
+    
+
+    def get_num_items_in_batch(self, batch_samples):
+        raise NotImplementedError("Subclasses must implement get_num_items_in_batch")
         
 
     def train_epoch(self, train_loader):
 
         self.set_mode(train=True)
 
+        self.optimizer.zero_grad(set_to_none=True)
+
         tracker = metrics.MetricTracker(self.use_ddp)
-        log_time = time.time()
-        log_step = self.trained_steps
 
-        # Training
-        for train_feats, sample_ids in train_loader:
+        train_iterator = iter(train_loader)
 
-            train_feats = {key: value.to(self.device) for key, value in train_feats.items()}
-            
-            loss, aux_data = self.update_fn(train_feats)
+        num_steps, remainder = divmod(len(train_loader), self.exp_conf.accumulation_steps)
+        if remainder: 
+            num_steps += 1
 
-            if torch.isnan(loss): raise Exception(f'NaN encountered')
-            if torch.isinf(loss): raise Exception(f'Inf encountered')
+        for step in range(num_steps):
 
-            tracker.update(aux_data)
+            num_microbatches = self.exp_conf.accumulation_steps
+            if step == num_steps - 1 and remainder:
+                num_microbatches = remainder
+
+            batch_samples, num_items_in_batch = self.get_batch_samples(train_iterator, num_microbatches)
+
+            if self.use_ddp:
+                total_items = torch.as_tensor(num_items_in_batch, device=self.device, dtype=torch.float32).clone()
+                dist.all_reduce(total_items, op=dist.ReduceOp.SUM)
+            else:
+                total_items = num_items_in_batch
+
+            for train_feats, sample_ids in batch_samples:
+
+                train_feats = {key: value.to(self.device) for key, value in train_feats.items()}
+
+                with torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=self.exp_conf.use_amp):
+                    loss, aux_data = self.loss_fn(train_feats)
+
+                if torch.isnan(loss): raise Exception(f'NaN encountered')
+                if torch.isinf(loss): raise Exception(f'Inf encountered')
+
+                if self.use_ddp:
+                    loss = loss * self.num_replicas / total_items
+                else:
+                    loss = loss / total_items
+
+                loss.backward()
+
+                tracker.update(aux_data)
+
+            if self.exp_conf.get('max_gradient_norm', None) is not None:
+                grad_norm = 0.0
+                for model in self.models.values():
+                    grad_norm += torch.nn.utils.clip_grad_norm_(model.parameters(), self.exp_conf.max_gradient_norm)
+                tracker.update({'grad_norm': (grad_norm.detach(), torch.tensor(1.0).to(self.device))})
+                    
+            self.optimizer.step()
+    
+            self.scheduler.step()
+    
+            self.optimizer.zero_grad(set_to_none=True)
 
             self.trained_steps += 1
+
+            tracker.step()
         
             # Logging to terminal train loss
             if self.trained_steps == 1 or self.trained_steps % self.exp_conf.log_freq == 0:
 
-                elapsed_time = time.time() - log_time
-                log_time = time.time()
-                elapsed_steps = self.trained_steps - log_step
-                log_step = self.trained_steps
-                step_per_sec = elapsed_steps / elapsed_time
-
                 loss_log = tracker.get_log()
 
-                self.rank_log(f'[Train {self.trained_steps}]: {loss_log}, steps/sec={step_per_sec:.5f}')
+                self.rank_log(f'[Train {self.trained_steps}]: {loss_log}')
 
-                tracker.clear()
+                tracker.reset()
 
             if self.exp_conf.ckpt_freq is not None and self.trained_steps % self.exp_conf.ckpt_freq == 0:
                 if self.exp_conf.ckpt_dir is not None:
@@ -338,43 +390,40 @@ class ExperimentTrain:
         self.set_mode(train=False)
 
         tracker = metrics.MetricTracker(self.use_ddp)
-        log_time = time.time()
 
-        # Validating
-        for valid_feats, sample_ids in valid_loader:
+        valid_iterator = iter(valid_loader)
 
-            valid_feats = {key: value.to(self.device) for key, value in valid_feats.items()}
+        num_steps, remainder = divmod(len(valid_loader), self.exp_conf.accumulation_steps)
+        if remainder: 
+            num_steps += 1
 
-            with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=self.exp_conf.use_amp):
-                loss, aux_data = self.loss_val_fn(valid_feats)
+        for step in range(num_steps):
 
-            tracker.update(aux_data)
+            num_microbatches = self.exp_conf.accumulation_steps
+            if step == num_steps - 1 and remainder:
+                num_microbatches = remainder
+
+            batch_samples, num_items_in_batch = self.get_batch_samples(valid_iterator, num_microbatches)
+
+            for valid_feats, sample_ids in batch_samples:
+
+                valid_feats = {key: value.to(self.device) for key, value in valid_feats.items()}
+                
+                with torch.no_grad(), torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=self.exp_conf.use_amp):
+                    loss, aux_data = self.loss_val_fn(valid_feats)
+
+                tracker.update(aux_data)
+
+            tracker.step()       
 
         # Logging to terminal validation loss
-        elapsed_time = time.time() - log_time
-        step_per_sec = len(valid_loader) / elapsed_time
-
         loss_log = tracker.get_log()
 
-        self.rank_log(f'[Validation {self.trained_epochs+1}]: {loss_log}, steps/sec={step_per_sec:.5f}')
+        self.rank_log(f'[Validation {self.trained_epochs}]: {loss_log}')
 
-        tracker.clear()
+        tracker.reset()
+
         
-    
-    def update_fn(self, data):
-
-        self.optimizer.zero_grad()
-
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=self.exp_conf.use_amp):
-            loss, aux_data = self.loss_fn(data)
-        
-        loss.backward()
-        
-        self.optimizer.step()
-
-        self.scheduler.step()
-
-        return loss, aux_data
     
 
     @staticmethod

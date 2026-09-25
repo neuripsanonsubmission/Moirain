@@ -7,7 +7,6 @@ from experiments import train
 
 from data import tokenizers
 from data import dataloader_moirain_base
-from data import utils as du
 from experiments import utils as eu
 
 from models import model_moirain_base
@@ -45,6 +44,31 @@ class ExperimentMoirainBaseTrain(train.ExperimentTrain):
         self.rank_log(f'Warm starting from: {self.exp_conf.warm_start}')
 
 
+    def build_optimizer(self):
+
+        decay = []
+        no_decay = []
+
+        for model in self.models.values():
+            seen = set()  # per model — only deduplicates within one model
+            for name, param in model.named_parameters():
+                if not param.requires_grad or id(param) in seen:
+                    continue
+                seen.add(id(param))
+                if param.ndim <= 1 or name.endswith('.bias'):
+                    no_decay.append(param)
+                else:
+                    decay.append(param)
+
+        params = [{"params": decay, "weight_decay": self.exp_conf.get('weight_decay', 0.1)}, {"params": no_decay, "weight_decay": 0.0}]
+
+        return torch.optim.AdamW(params, lr=self.exp_conf.learning_rate, betas=(0.9, 0.95), eps=1e-06)
+
+
+    def get_num_items_in_batch(self, batch_samples):
+        return sum(batch['pad_na'][:, 1:].sum() for batch, sample_ids in batch_samples)
+
+
     @train.ExperimentTrain.detach_outputs
     def loss_fn(self, batch):
         
@@ -62,29 +86,22 @@ class ExperimentMoirainBaseTrain(train.ExperimentTrain):
         
         loss_type = F.cross_entropy(logits_type, target_type, reduction="none").reshape(batch_size, num_tok-1)
 
-        final_loss_type = (loss_type*mask).sum(-1) / mask.sum(-1)
-
-        final_loss = final_loss_type
+        final_loss_type = (loss_type*mask).sum()
         
         aux_data = {
-            'total_loss': (final_loss.sum(), torch.tensor(batch_size).to(self.device)),
-            'type_loss': (final_loss_type.sum(), torch.tensor(batch_size).to(self.device))
+            'total_loss': (final_loss_type, mask.sum())
         }
         
-        return final_loss.sum()/batch_size, aux_data
+        return final_loss_type, aux_data
     
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="base_moirain_base")
 def run(conf):
-    exp = ExperimentMoirainBaseTrain(conf=conf)
+    exp = ExperimentRLMTrain(conf=conf)
     exp.start_training()
     
 
 
 if __name__ == '__main__':
     run()
-        
-    
-
-
